@@ -1,105 +1,128 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EdgePulse Trojan 管理面板</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-    <style>
-        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(226, 232, 240, 0.8); }
-    </style>
-</head>
-<body class="bg-slate-50 min-h-screen text-slate-800">
-    <!-- 登录层 -->
-    <div id="loginOverlay" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm text-center">
-            <h2 class="text-2xl font-bold mb-6">管理登录</h2>
-            <input type="password" id="adminPassword" class="w-full p-3 bg-slate-100 rounded-lg mb-4 text-center tracking-widest outline-orange-500" placeholder="输入 ADMIN_PASS">
-            <button onclick="login()" class="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-bold transition">确认进入</button>
-            <p id="loginError" class="text-red-500 text-sm mt-3 hidden">鉴权失败，请检查环境变量</p>
-        </div>
-    </div>
+import { connect } from 'cloudflare:sockets';
 
-    <!-- 主界面 -->
-    <div id="mainContent" class="max-w-4xl mx-auto p-4 md:p-8 opacity-0 transition-opacity duration-500">
-        <header class="flex justify-between items-center mb-8">
-            <h1 class="text-2xl font-bold text-orange-500">EdgePulse <span class="text-slate-400 font-normal">Dashboard</span></h1>
-            <button onclick="saveConfig()" class="px-6 py-2 bg-orange-500 text-white rounded-lg font-bold shadow-lg shadow-orange-200">保存设置</button>
-        </header>
+export default {
+    async fetch(request, env) {
+        const url = new URL(request.url);
+        const upgradeHeader = request.headers.get('Upgrade');
+        const userAgent = request.headers.get('User-Agent')?.toLowerCase() || '';
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div class="glass p-6 rounded-2xl">
-                <h3 class="font-bold mb-4 flex justify-between">
-                    <span>📡 节点状态</span>
-                    <button onclick="testPing()" class="text-xs text-blue-500">点此测试</button>
-                </h3>
-                <div class="p-4 bg-white/50 rounded-xl border border-slate-100">
-                    <p id="pingStatus" class="text-sm font-medium">就绪</p>
-                    <p id="pingMs" class="text-xs text-slate-400">延迟: -- ms</p>
-                </div>
-            </div>
-            <div class="glass p-6 rounded-2xl">
-                <h3 class="font-bold mb-4 text-slate-700">⚙️ 核心配置</h3>
-                <div class="space-y-3">
-                    <input type="text" id="proxyIP" class="w-full p-2 bg-white rounded-lg border border-slate-200 text-sm" placeholder="优选 IP">
-                    <input type="text" id="password" class="w-full p-2 bg-white rounded-lg border border-slate-200 text-sm" placeholder="Trojan 密码">
-                </div>
-            </div>
-        </div>
+        // --- 1. 配置读取 (从环境变量及 KV 获取) ---
+        const ADMIN_PASS = env.ADMIN_PASS || 'admin888';
+        const PASSWORD = await env.CONFIG_KV?.get('PASSWORD') || '487f070f-2aa2-45af-aacc-cc0371a4686b';
+        const TROJAN_HASH = await env.CONFIG_KV?.get('TROJAN_HASH') || '530d95c256247c473111f185db2d6e35187e1f41d08dcd370e0f31c8';
+        const PROXY_IP = await env.CONFIG_KV?.get('PROXY_IP') || '104.17.105.226';
+        const BYPASS_LIST = await env.CONFIG_KV?.get('BYPASS_LIST') || '';
+        const SUB_PATH = await env.CONFIG_KV?.get('SUB_PATH') || '/';
 
-        <div class="glass p-6 rounded-2xl">
-            <h3 class="font-bold mb-4 text-slate-700">🛣️ 分流规则 (Bypass List)</h3>
-            <textarea id="bypassList" rows="5" class="w-full p-3 bg-white rounded-lg border border-slate-200 text-sm font-mono" placeholder="每行一个域名，例如: *.cn"></textarea>
-            <p class="text-[10px] text-slate-400 mt-2 italic">提示：直连名单内的域名将绕过代理直连。</p>
-        </div>
-    </div>
-
-    <script>
-        let AUTH = "";
-        async function login() {
-            const pwd = document.getElementById('adminPassword').value;
-            const res = await fetch('/api/config', { headers: { 'Authorization': pwd } });
-            if (res.ok) {
-                AUTH = pwd;
-                document.getElementById('loginOverlay').remove();
-                document.getElementById('mainContent').classList.remove('opacity-0');
-                const data = await res.json();
-                document.getElementById('proxyIP').value = data.PROXY_IP || '';
-                document.getElementById('password').value = data.PASSWORD || '';
-                document.getElementById('bypassList').value = data.BYPASS_LIST || '';
-                testPing();
-            } else {
-                document.getElementById('loginError').classList.remove('hidden');
+        // --- 2. 自动生成订阅 (解决“无可用服务器”问题) ---
+        // 判定逻辑：路径匹配且不是 WebSocket 握手，也不是管理面板 API 请求
+        if (url.pathname === SUB_PATH && !upgradeHeader && !url.pathname.startsWith('/api/')) {
+            // 如果是浏览器直接访问，不带特殊 UA，则跳过此段进入下方的静态页面逻辑
+            const isBrowser = userAgent.includes('mozilla') && !userAgent.includes('clash') && !userAgent.includes('shadowrocket');
+            
+            if (!isBrowser || url.searchParams.has('sub')) {
+                const subLink = `trojan://${PASSWORD}@${url.host}:443?encryption=none&security=tls&sni=${url.host}&type=ws&host=${url.host}&path=${encodeURIComponent(SUB_PATH)}#EdgePulse`;
+                
+                // 返回 Base64 编码的订阅内容
+                return new Response(btoa(subLink), {
+                    headers: { 
+                        'Content-Type': 'text/plain; charset=utf-8',
+                        'Cache-Control': 'no-store'
+                    }
+                });
             }
         }
 
-        async function testPing() {
-            const start = Date.now();
-            try {
-                const res = await fetch('/api/ping', { headers: { 'Authorization': AUTH } });
-                if (res.ok) {
-                    document.getElementById('pingStatus').innerText = "在线 (Online)";
-                    document.getElementById('pingMs').innerText = `延迟: ${Date.now() - start} ms`;
+        // --- 3. 管理面板 API ---
+        if (url.pathname.startsWith('/api/')) {
+            if (request.headers.get('Authorization') !== ADMIN_PASS) {
+                return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+            }
+
+            if (url.pathname === '/api/config') {
+                if (request.method === 'GET') {
+                    return new Response(JSON.stringify({ PROXY_IP, PASSWORD, BYPASS_LIST, SUB_PATH }), {
+                        headers: { 'Content-Type': 'application/json' }
+                    });
                 }
-            } catch(e) { document.getElementById('pingStatus').innerText = "超时"; }
+                if (request.method === 'POST') {
+                    const data = await request.json();
+                    if (data.PASSWORD) await env.CONFIG_KV.put('PASSWORD', data.PASSWORD);
+                    if (data.TROJAN_HASH) await env.CONFIG_KV.put('TROJAN_HASH', data.TROJAN_HASH);
+                    if (data.PROXY_IP) await env.CONFIG_KV.put('PROXY_IP', data.PROXY_IP);
+                    if (data.BYPASS_LIST) await env.CONFIG_KV.put('BYPASS_LIST', data.BYPASS_LIST);
+                    if (data.SUB_PATH) await env.CONFIG_KV.put('SUB_PATH', data.SUB_PATH);
+                    return new Response('OK');
+                }
+            }
+            if (url.pathname === '/api/ping') return new Response('pong');
         }
 
-        async function saveConfig() {
-            const pwd = document.getElementById('password').value;
-            const config = {
-                PROXY_IP: document.getElementById('proxyIP').value,
-                PASSWORD: pwd,
-                TROJAN_HASH: CryptoJS.SHA224(pwd).toString(),
-                BYPASS_LIST: document.getElementById('bypassList').value
-            };
-            const res = await fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Authorization': AUTH, 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-            if (res.ok) alert('同步成功，节点已生效！');
+        // --- 4. Trojan 协议处理 (WebSocket 0-RTT) ---
+        if (upgradeHeader === 'websocket' && url.pathname === SUB_PATH) {
+            return await handleTrojanWS(request, TROJAN_HASH, PROXY_IP, BYPASS_LIST);
         }
-    </script>
-</body>
-</html>
+
+        // --- 5. 静态资源回退 (显示 Dashboard) ---
+        try {
+            return await env.ASSETS.fetch(request);
+        } catch (e) {
+            return new Response('Not Found', { status: 404 });
+        }
+    }
+};
+
+// 后端协议处理逻辑 (保持不变，已包含 0-RTT 修复)
+async function handleTrojanWS(request, validHash, proxyIp, bypassList) {
+    const [client, server] = new WebSocketPair();
+    server.accept();
+    let earlyData = new Uint8Array(0);
+    const edHeader = request.headers.get('Sec-WebSocket-Protocol');
+    if (edHeader && edHeader.length > 8) {
+        try {
+            const b64 = edHeader.replace(/-/g, '+').replace(/_/g, '/');
+            earlyData = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        } catch (e) {}
+    }
+    processStream(server, earlyData, validHash, proxyIp, bypassList).catch(() => server.close());
+    const responseHeaders = new Headers();
+    if (edHeader) responseHeaders.set('Sec-WebSocket-Protocol', edHeader);
+    return new Response(null, { status: 101, webSocket: client, headers: responseHeaders });
+}
+
+async function processStream(server, earlyData, validHash, proxyIp, bypassList) {
+    let firstChunk = earlyData;
+    if (firstChunk.byteLength === 0) {
+        const reader = server.readable.getReader();
+        const { value, done } = await reader.read();
+        if (done) return;
+        firstChunk = value;
+        reader.releaseLock();
+    }
+    if (firstChunk.byteLength < 58) return server.close();
+    const clientHash = new TextDecoder().decode(firstChunk.slice(0, 56));
+    if (clientHash !== validHash) return server.close();
+    let offset = 58;
+    const atyp = firstChunk[offset + 1];
+    offset += 2;
+    let address = '';
+    if (atyp === 1) { address = firstChunk.slice(offset, offset + 4).join('.'); offset += 4; }
+    else if (atyp === 3) {
+        const len = firstChunk[offset++];
+        address = new TextDecoder().decode(firstChunk.slice(offset, offset + len));
+        offset += len;
+    }
+    const port = (firstChunk[offset] << 8) | firstChunk[offset + 1];
+    offset += 4;
+    let target = proxyIp;
+    if (bypassList && address) {
+        const isBypass = bypassList.split('\n').some(rule => rule.trim() && address.includes(rule.trim().replace('*', '')));
+        if (isBypass) target = address;
+    }
+    const remoteSocket = connect({ hostname: target, port: port }, { keepAlive: true });
+    const writer = remoteSocket.writable.getWriter();
+    await writer.write(firstChunk.slice(offset));
+    writer.releaseLock();
+    remoteSocket.readable.pipeTo(server.writable);
+    server.readable.pipeTo(remoteSocket.writable);
+}
