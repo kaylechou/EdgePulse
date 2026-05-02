@@ -5,38 +5,50 @@ export default {
         const url = new URL(request.url);
         const upgradeHeader = request.headers.get('Upgrade');
 
-        // --- 读取配置 ---
-        const ADMIN_PASS = await env.CONFIG_KV?.get('ADMIN_PASS') || 'admin888';
+        // --- 1. 配置初始化 (优先读取环境变量，其次读取 KV) ---
+        const ADMIN_PASS = env.ADMIN_PASS || await env.CONFIG_KV?.get('ADMIN_PASS') || 'admin888';
         const PASSWORD = await env.CONFIG_KV?.get('PASSWORD') || '487f070f-2aa2-45af-aacc-cc0371a4686b';
         const TROJAN_HASH = await env.CONFIG_KV?.get('TROJAN_HASH') || '530d95c256247c473111f185db2d6e35187e1f41d08dcd370e0f31c8';
         const PROXY_IP = await env.CONFIG_KV?.get('PROXY_IP') || '104.17.105.226';
         const BYPASS_LIST = await env.CONFIG_KV?.get('BYPASS_LIST') || '';
+        const SUB_PATH = await env.CONFIG_KV?.get('SUB_PATH') || '/';
 
-        // --- API 管理接口 ---
+        // --- 2. 管理 API 接口 ---
         if (url.pathname.startsWith('/api/')) {
-            if (request.headers.get('Authorization') !== ADMIN_PASS) return new Response('Unauthorized', { status: 401 });
+            if (request.headers.get('Authorization') !== ADMIN_PASS) {
+                return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 });
+            }
 
             if (url.pathname === '/api/config') {
-                if (request.method === 'GET') return new Response(JSON.stringify({ PROXY_IP, PASSWORD, BYPASS_LIST }));
+                if (request.method === 'GET') {
+                    return new Response(JSON.stringify({ PROXY_IP, PASSWORD, BYPASS_LIST, SUB_PATH }), {
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
                 if (request.method === 'POST') {
                     const data = await request.json();
-                    await env.CONFIG_KV.put('PROXY_IP', data.PROXY_IP);
-                    await env.CONFIG_KV.put('PASSWORD', data.PASSWORD);
-                    await env.CONFIG_KV.put('TROJAN_HASH', data.TROJAN_HASH);
-                    await env.CONFIG_KV.put('BYPASS_LIST', data.BYPASS_LIST);
+                    if (data.PASSWORD) await env.CONFIG_KV.put('PASSWORD', data.PASSWORD);
+                    if (data.TROJAN_HASH) await env.CONFIG_KV.put('TROJAN_HASH', data.TROJAN_HASH);
+                    if (data.PROXY_IP) await env.CONFIG_KV.put('PROXY_IP', data.PROXY_IP);
+                    if (data.BYPASS_LIST) await env.CONFIG_KV.put('BYPASS_LIST', data.BYPASS_LIST);
+                    if (data.SUB_PATH) await env.CONFIG_KV.put('SUB_PATH', data.SUB_PATH);
                     return new Response('OK');
                 }
             }
             if (url.pathname === '/api/ping') return new Response('pong');
         }
 
-        // --- Trojan 协议核心 (支持路径 /) ---
-        if (upgradeHeader === 'websocket') {
+        // --- 3. Trojan 协议处理 (支持 WebSocket 0-RTT) ---
+        if (upgradeHeader === 'websocket' && url.pathname === SUB_PATH) {
             return await handleTrojanWS(request, TROJAN_HASH, PROXY_IP, BYPASS_LIST);
         }
 
-        // --- 静态页面返回 ---
-        return await env.ASSETS.fetch(request);
+        // --- 4. 静态资源回退 (防止 404) ---
+        try {
+            return await env.ASSETS.fetch(request);
+        } catch (e) {
+            return new Response('Not Found', { status: 404 });
+        }
     }
 };
 
@@ -44,7 +56,7 @@ async function handleTrojanWS(request, validHash, proxyIp, bypassList) {
     const [client, server] = new WebSocketPair();
     server.accept();
 
-    // 提取 Early Data (0-RTT)
+    // 0-RTT Early Data 提取
     let earlyData = new Uint8Array(0);
     const edHeader = request.headers.get('Sec-WebSocket-Protocol');
     if (edHeader) {
@@ -71,11 +83,10 @@ async function processStream(server, earlyData, validHash, proxyIp, bypassList) 
         reader.releaseLock();
     }
 
-    // 校验哈希
+    if (firstChunk.byteLength < 58) return server.close();
     const clientHash = new TextDecoder().decode(firstChunk.slice(0, 56));
     if (clientHash !== validHash) return server.close();
 
-    // 解析目标地址
     let offset = 58;
     const atyp = firstChunk[offset + 1];
     offset += 2;
@@ -88,28 +99,25 @@ async function processStream(server, earlyData, validHash, proxyIp, bypassList) 
         address = new TextDecoder().decode(firstChunk.slice(offset, offset + len));
         offset += len;
     }
-
     const port = (firstChunk[offset] << 8) | firstChunk[offset + 1];
-    offset += 4; // 跳过端口和末尾 CRLF
+    offset += 4;
 
-    // --- 分流判定 ---
-    let finalTarget = proxyIp;
+    // 分流逻辑判定
+    let target = proxyIp;
     if (bypassList) {
         const rules = bypassList.split('\n').filter(r => r.trim());
         const isBypass = rules.some(rule => {
             const regex = new RegExp('^' + rule.trim().replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
             return regex.test(address);
         });
-        if (isBypass) finalTarget = address;
+        if (isBypass) target = address;
     }
 
-    // 建立连接并转发
-    const remoteSocket = connect({ hostname: finalTarget, port: port }, { keepAlive: true });
+    const remoteSocket = connect({ hostname: target, port: port }, { keepAlive: true });
     const writer = remoteSocket.writable.getWriter();
     await writer.write(firstChunk.slice(offset));
     writer.releaseLock();
 
-    // 硬件级全双工透传
     remoteSocket.readable.pipeTo(server.writable);
     server.readable.pipeTo(remoteSocket.writable);
 }
