@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EdgePulse Trojan 控制面板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        .glass-card { background: white; border-radius: 20px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
+        .input-field { width: 100%; padding: 10px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; font-family: monospace; font-size: 14px; outline: none; }
+        .input-field:focus { border-color: #f97316; ring: 2px; ring-color: #ffedd5; }
+        .btn-orange { background: linear-gradient(135deg, #f97316, #fb923c); color: white; padding: 10px 20px; border-radius: 10px; font-weight: bold; transition: 0.3s; }
+        .btn-orange:hover { opacity: 0.9; transform: translateY(-1px); }
+    </style>
+</head>
+<body class="bg-slate-50 p-4 md:p-8">
+    <div id="loginOverlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-50">
+        <div class="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm">
+            <h2 class="text-2xl font-bold mb-6 text-center text-gray-800">管理登录</h2>
+            <input type="password" id="adminPassword" class="input-field mb-4 text-center text-xl tracking-widest" placeholder="输入控制台密码">
+            <button onclick="login()" class="w-full btn-orange">进入系统</button>
+            <p id="loginError" class="text-red-500 text-sm mt-3 text-center hidden">验证失败，请重试</p>
+        </div>
+    </div>
+
+    <div id="mainContent" class="max-w-4xl mx-auto space-y-6 opacity-0 transition-opacity duration-500">
+        <header class="glass-card p-6 flex justify-between items-center">
+            <div>
+                <h1 class="text-xl font-bold text-gray-800">EdgePulse <span class="text-orange-500">Trojan</span></h1>
+                <p class="text-xs text-gray-400">WebSocket + 0-RTT + Routing</p>
+            </div>
+            <button onclick="saveConfig()" class="btn-orange">保存并同步</button>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="glass-card p-6 space-y-4">
+                <h2 class="font-bold text-gray-700 flex justify-between">
+                    <span>📊 节点状态</span>
+                    <button onclick="testLatency()" class="text-xs text-orange-500">重新测试</button>
+                </h2>
+                <div class="flex items-center gap-4 p-4 bg-orange-50 rounded-xl">
+                    <div id="statusDot" class="w-3 h-3 rounded-full bg-gray-400"></div>
+                    <div>
+                        <p id="statusText" class="text-sm font-bold">就绪</p>
+                        <p id="latencyText" class="text-xs text-gray-500">延迟: -- ms</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="glass-card p-6 space-y-4">
+                <h2 class="font-bold text-gray-700">⚙️ 核心配置</h2>
+                <div>
+                    <label class="text-[10px] uppercase font-bold text-gray-400">优选代理地址</label>
+                    <input type="text" id="proxyIP" class="input-field" placeholder="104.17.105.226">
+                </div>
+                <div>
+                    <label class="text-[10px] uppercase font-bold text-gray-400">Trojan 密码</label>
+                    <input type="text" id="password" class="input-field">
+                </div>
+            </div>
+        </div>
+
+        <div class="glass-card p-6 space-y-4">
+            <h2 class="font-bold text-gray-700">🛣️ 分流规则 (Bypass List)</h2>
+            <textarea id="bypassList" rows="4" class="input-field" placeholder="每行一个域名，例如:&#10;*.cn&#10;baidu.com"></textarea>
+            <p class="text-[10px] text-gray-400 italic">命中上述规则的请求将直接连接，不经过优选 IP。</p>
+        </div>
+    </div>
+
+    <script>
+        let AUTH_TOKEN = "";
+
+        async function login() {
+            const pwd = document.getElementById('adminPassword').value;
+            const res = await fetch('/api/config', { headers: { 'Authorization': pwd } });
+            if (res.ok) {
+                AUTH_TOKEN = pwd;
+                document.getElementById('loginOverlay').classList.add('hidden');
+                document.getElementById('mainContent').classList.remove('opacity-0');
+                const data = await res.json();
+                document.getElementById('proxyIP').value = data.PROXY_IP || '';
+                document.getElementById('password').value = data.PASSWORD || '';
+                document.getElementById('bypassList').value = data.BYPASS_LIST || '';
+                testLatency();
+            } else {
+                document.getElementById('loginError').classList.remove('hidden');
+            }
+        }
+
+        async function testLatency() {
+            const start = Date.now();
+            try {
+                const res = await fetch('/api/ping', { headers: { 'Authorization': AUTH_TOKEN } });
+                if (res.ok) {
+                    const ms = Date.now() - start;
+                    document.getElementById('statusDot').className = "w-3 h-3 rounded-full bg-green-500";
+                    document.getElementById('statusText').innerText = "在线";
+                    document.getElementById('latencyText').innerText = `延迟: ${ms} ms`;
+                }
+            } catch(e) {
+                document.getElementById('statusDot').className = "w-3 h-3 rounded-full bg-red-500";
+                document.getElementById('statusText').innerText = "超时";
+            }
+        }
+
+        async function saveConfig() {
+            const pwd = document.getElementById('password').value;
+            const hash = CryptoJS.SHA224(pwd).toString();
+            const config = {
+                PROXY_IP: document.getElementById('proxyIP').value,
+                PASSWORD: pwd,
+                TROJAN_HASH: hash,
+                BYPASS_LIST: document.getElementById('bypassList').value
+            };
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Authorization': AUTH_TOKEN, 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+            if (res.ok) alert('配置已同步！');
+        }
+    </script>
+</body>
+</html>
