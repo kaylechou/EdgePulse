@@ -3,86 +3,117 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EdgePulse Trojan 管理面板</title>
+    <title>EdgePulse Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <style>
-        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(226, 232, 240, 0.8); }
+        .glass { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); border: 1px solid rgba(226, 232, 240, 0.8); }
+        body { background-color: #f8fafc; }
     </style>
 </head>
-<body class="bg-slate-50 min-h-screen text-slate-800">
-    <!-- 登录层 -->
-    <div id="loginOverlay" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm text-center">
-            <h2 class="text-2xl font-bold mb-6">管理登录</h2>
-            <input type="password" id="adminPassword" class="w-full p-3 bg-slate-100 rounded-lg mb-4 text-center tracking-widest outline-orange-500" placeholder="输入 ADMIN_PASS">
-            <button onclick="login()" class="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-bold transition">确认进入</button>
+<body class="min-h-screen text-slate-800">
+    <!-- 登录界面 -->
+    <div id="loginOverlay" class="fixed inset-0 bg-slate-900/50 backdrop-blur-md flex items-center justify-center z-50">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center">
+            <h2 class="text-2xl font-bold mb-6 text-orange-600">管理登录</h2>
+            <input type="password" id="adminPassword" class="w-full p-3 bg-slate-100 rounded-xl mb-4 text-center tracking-widest outline-orange-500 border-none" placeholder="输入 ADMIN_PASS">
+            <button onclick="login()" class="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold transition shadow-lg shadow-orange-200">确认进入</button>
             <p id="loginError" class="text-red-500 text-sm mt-3 hidden">鉴权失败，请检查环境变量</p>
         </div>
     </div>
 
-    <!-- 主界面 -->
-    <div id="mainContent" class="max-w-4xl mx-auto p-4 md:p-8 opacity-0 transition-opacity duration-500">
+    <!-- 主界面 (默认隐藏) -->
+    <div id="mainContent" class="max-w-4xl mx-auto p-4 md:p-8 opacity-0 transition-opacity duration-700 pointer-events-none">
         <header class="flex justify-between items-center mb-8">
-            <h1 class="text-2xl font-bold text-orange-500">EdgePulse <span class="text-slate-400 font-normal">Dashboard</span></h1>
-            <button onclick="saveConfig()" class="px-6 py-2 bg-orange-500 text-white rounded-lg font-bold shadow-lg shadow-orange-200">保存设置</button>
+            <h1 class="text-2xl font-bold text-orange-600">EdgePulse <span class="text-slate-400 font-light">Dashboard</span></h1>
+            <button onclick="saveConfig()" class="px-6 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold shadow-lg shadow-orange-300 transition">保存设置</button>
         </header>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div class="glass p-6 rounded-2xl">
-                <h3 class="font-bold mb-4 flex justify-between">
+            <!-- 状态卡片 -->
+            <div class="glass p-6 rounded-2xl shadow-sm">
+                <h3 class="font-bold mb-4 flex justify-between items-center text-slate-600">
                     <span>📡 节点状态</span>
-                    <button onclick="testPing()" class="text-xs text-blue-500">点此测试</button>
+                    <button onclick="testPing()" class="text-xs text-orange-500 hover:underline">重新测试</button>
                 </h3>
-                <div class="p-4 bg-white/50 rounded-xl border border-slate-100">
-                    <p id="pingStatus" class="text-sm font-medium">就绪</p>
-                    <p id="pingMs" class="text-xs text-slate-400">延迟: -- ms</p>
+                <div class="p-4 bg-orange-50/50 rounded-xl border border-orange-100">
+                    <p id="pingStatus" class="text-sm font-semibold text-orange-700">正在检测...</p>
+                    <p id="pingMs" class="text-xs text-orange-400 mt-1">延迟: -- ms</p>
                 </div>
             </div>
-            <div class="glass p-6 rounded-2xl">
-                <h3 class="font-bold mb-4 text-slate-700">⚙️ 核心配置</h3>
+
+            <!-- 配置卡片 -->
+            <div class="glass p-6 rounded-2xl shadow-sm">
+                <h3 class="font-bold mb-4 text-slate-600">⚙️ 核心配置</h3>
                 <div class="space-y-3">
-                    <input type="text" id="proxyIP" class="w-full p-2 bg-white rounded-lg border border-slate-200 text-sm" placeholder="优选 IP">
-                    <input type="text" id="password" class="w-full p-2 bg-white rounded-lg border border-slate-200 text-sm" placeholder="Trojan 密码">
+                    <div>
+                        <label class="text-[10px] text-slate-400 uppercase font-bold ml-1">优选 IP / 地址</label>
+                        <input type="text" id="proxyIP" class="w-full p-2 bg-white rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-orange-500 outline-none" placeholder="例如: 104.17.105.226">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-slate-400 uppercase font-bold ml-1">Trojan 密码</label>
+                        <input type="text" id="password" class="w-full p-2 bg-white rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-orange-500 outline-none">
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="glass p-6 rounded-2xl">
-            <h3 class="font-bold mb-4 text-slate-700">🛣️ 分流规则 (Bypass List)</h3>
-            <textarea id="bypassList" rows="5" class="w-full p-3 bg-white rounded-lg border border-slate-200 text-sm font-mono" placeholder="每行一个域名，例如: *.cn"></textarea>
-            <p class="text-[10px] text-slate-400 mt-2 italic">提示：直连名单内的域名将绕过代理直连。</p>
+        <!-- 分流规则 -->
+        <div class="glass p-6 rounded-2xl shadow-sm">
+            <h3 class="font-bold mb-4 text-slate-600">🛣️ 分流规则 (Bypass List)</h3>
+            <textarea id="bypassList" rows="5" class="w-full p-3 bg-white rounded-xl border border-slate-200 text-sm font-mono focus:ring-2 focus:ring-orange-500 outline-none" placeholder="每行一个域名，例如: *.baidu.com"></textarea>
+            <div class="flex items-center mt-3 text-[11px] text-slate-400 italic">
+                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="id-circle"></path></svg>
+                提示：匹配到的域名将绕过 Cloudflare 直连，提升国内访问速度。
+            </div>
         </div>
     </div>
 
     <script>
         let AUTH = "";
+
         async function login() {
             const pwd = document.getElementById('adminPassword').value;
-            const res = await fetch('/api/config', { headers: { 'Authorization': pwd } });
-            if (res.ok) {
-                AUTH = pwd;
-                document.getElementById('loginOverlay').remove();
-                document.getElementById('mainContent').classList.remove('opacity-0');
-                const data = await res.json();
-                document.getElementById('proxyIP').value = data.PROXY_IP || '';
-                document.getElementById('password').value = data.PASSWORD || '';
-                document.getElementById('bypassList').value = data.BYPASS_LIST || '';
-                testPing();
-            } else {
-                document.getElementById('loginError').classList.remove('hidden');
+            const errorHint = document.getElementById('loginError');
+            
+            try {
+                const res = await fetch('/api/config', { headers: { 'Authorization': pwd } });
+                if (res.ok) {
+                    AUTH = pwd;
+                    const overlay = document.getElementById('loginOverlay');
+                    overlay.style.display = 'none';
+                    
+                    const main = document.getElementById('mainContent');
+                    main.classList.remove('opacity-0', 'pointer-events-none');
+                    
+                    const data = await res.json();
+                    document.getElementById('proxyIP').value = data.PROXY_IP || '';
+                    document.getElementById('password').value = data.PASSWORD || '';
+                    document.getElementById('bypassList').value = data.BYPASS_LIST || '';
+                    testPing();
+                } else {
+                    errorHint.classList.remove('hidden');
+                }
+            } catch(e) {
+                alert("连接失败，请确保 _worker.js 已正确部署");
             }
         }
 
         async function testPing() {
             const start = Date.now();
+            const statusText = document.getElementById('pingStatus');
+            const msText = document.getElementById('pingMs');
+            
+            statusText.innerText = "正在测试...";
             try {
                 const res = await fetch('/api/ping', { headers: { 'Authorization': AUTH } });
                 if (res.ok) {
-                    document.getElementById('pingStatus').innerText = "在线 (Online)";
-                    document.getElementById('pingMs').innerText = `延迟: ${Date.now() - start} ms`;
+                    statusText.innerText = "在线 (Online)";
+                    msText.innerText = `延迟: ${Date.now() - start} ms`;
                 }
-            } catch(e) { document.getElementById('pingStatus').innerText = "超时"; }
+            } catch(e) { 
+                statusText.innerText = "连接超时";
+            }
         }
 
         async function saveConfig() {
@@ -93,12 +124,17 @@
                 TROJAN_HASH: CryptoJS.SHA224(pwd).toString(),
                 BYPASS_LIST: document.getElementById('bypassList').value
             };
-            const res = await fetch('/api/config', {
-                method: 'POST',
-                headers: { 'Authorization': AUTH, 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-            if (res.ok) alert('同步成功，节点已生效！');
+            
+            try {
+                const res = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Authorization': AUTH, 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                if (res.ok) alert('配置已同步至 KV 存储！');
+            } catch(e) {
+                alert('保存失败，请检查网络或 KV 绑定设置');
+            }
         }
     </script>
 </body>
